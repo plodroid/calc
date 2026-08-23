@@ -1,0 +1,38 @@
+name: Greywake Build
+on:
+  push:
+    branches: [ greywake-build-temp ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract source
+        run: tar -xzf greywake-ci-source.tar.gz
+      - name: Apply Minecraft 1.21.11 API fixes
+        run: |
+          sed -i 's/import net.minecraft.item.Rarity;/import net.minecraft.util.Rarity;/' Greywake/src/main/java/dev/plodroid/greywake/GreywakeContent.java
+          sed -i 's/entity.getServer()/entity.getEntityWorld().getServer()/g' Greywake/src/main/java/dev/plodroid/greywake/GreywakeServer.java
+          sed -i 's/SoundEvents.AMBIENT_CAVE,/SoundEvents.AMBIENT_CAVE.value(),/g' Greywake/src/main/java/dev/plodroid/greywake/GreywakeServer.java
+          sed -i 's/target.getWorld().getRegistryKey()/target.getEntityWorld().getRegistryKey()/g' Greywake/src/main/java/dev/plodroid/greywake/GreywakeServer.java
+      - uses: actions/setup-java@v4
+        with:
+          distribution: microsoft
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.1'
+      - name: Build Greywake
+        working-directory: Greywake
+        run: gradle build --stacktrace
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: greywake-build
+          path: |
+            Greywake/build/libs/greywake-1.0.0.jar
+            Greywake/build/libs/greywake-1.0.0-sources.jar
