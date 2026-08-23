@@ -1,0 +1,30 @@
+name: Greywake Build
+on:
+  push:
+    branches: [ greywake-build-temp ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract source
+        run: tar -xzf greywake-ci-source.tar.gz
+      - uses: actions/setup-java@v4
+        with:
+          distribution: microsoft
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.1'
+      - name: Build Greywake
+        working-directory: Greywake
+        run: gradle build --stacktrace
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: greywake-build
+          path: |
+            Greywake/build/libs/greywake-1.0.0.jar
+            Greywake/build/libs/greywake-1.0.0-sources.jar
