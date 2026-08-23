@@ -2,6 +2,8 @@ name: Greywake Build
 on:
   push:
     branches: [ greywake-build-temp ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
