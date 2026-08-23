@@ -13,6 +13,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Extract source
         run: tar -xzf greywake-ci-source.tar.gz
+      - name: Apply Minecraft 1.21.11 API fixes
+        run: |
+          sed -i 's/import net.minecraft.item.Rarity;/import net.minecraft.util.Rarity;/' Greywake/src/main/java/dev/plodroid/greywake/GreywakeContent.java
+          sed -i 's/entity.getServer()/entity.getEntityWorld().getServer()/g' Greywake/src/main/java/dev/plodroid/greywake/GreywakeServer.java
+          sed -i 's/SoundEvents.AMBIENT_CAVE,/SoundEvents.AMBIENT_CAVE.value(),/g' Greywake/src/main/java/dev/plodroid/greywake/GreywakeServer.java
+          sed -i 's/target.getWorld().getRegistryKey()/target.getEntityWorld().getRegistryKey()/g' Greywake/src/main/java/dev/plodroid/greywake/GreywakeServer.java
       - uses: actions/setup-java@v4
         with:
           distribution: microsoft
