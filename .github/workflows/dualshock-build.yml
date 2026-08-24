@@ -26,6 +26,9 @@ jobs:
                  (Get-Content "dualshock-build/src.b64.04" -Raw)
           [IO.File]::WriteAllBytes("source.zip", [Convert]::FromBase64String($b64))
           Expand-Archive "source.zip" -DestinationPath "src"
+          $proj = "src/DualShockStudio/DualShockStudio.csproj"
+          (Get-Content $proj -Raw).Replace('Microsoft.Windows.SDK.Contracts" Version="10.0.28000.2526','Microsoft.Windows.SDK.Contracts" Version="10.0.19041.1') | Set-Content $proj
+          dotnet new globaljson --sdk-version 8.0.424 --force
 
       - name: Restore
         run: dotnet restore src/DualShockStudio/DualShockStudio.csproj
