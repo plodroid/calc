@@ -1,0 +1,53 @@
+name: Build DualShock Studio
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  windows-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Rebuild source archive
+        shell: pwsh
+        run: |
+          $b64 = (Get-Content "dualshock-build/src.b64.00" -Raw) +
+                 (Get-Content "dualshock-build/src.b64.01" -Raw) +
+                 (Get-Content "dualshock-build/src.b64.02" -Raw) +
+                 (Get-Content "dualshock-build/src.b64.03" -Raw) +
+                 (Get-Content "dualshock-build/src.b64.04" -Raw)
+          [IO.File]::WriteAllBytes("source.zip", [Convert]::FromBase64String($b64))
+          Expand-Archive "source.zip" -DestinationPath "src"
+
+      - name: Restore
+        run: dotnet restore src/DualShockStudio/DualShockStudio.csproj
+
+      - name: Publish
+        run: dotnet publish src/DualShockStudio/DualShockStudio.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $pub = "src/DualShockStudio/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "$pub/DualShockStudio.exe" "dist/DualShockStudio.exe"
+          Copy-Item "src/DualShockStudio/README.md" "dist/README.md"
+          Compress-Archive -Path "dist/DualShockStudio.exe","dist/README.md" -DestinationPath "dist/DualShockStudio.zip" -Force
+          Compress-Archive -Path "src/DualShockStudio/*" -DestinationPath "dist/DualShockStudio-Source.zip" -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DualShockStudio-Windows-x64
+          path: |
+            dist/DualShockStudio.exe
+            dist/DualShockStudio.zip
+            dist/DualShockStudio-Source.zip
+          if-no-files-found: error
