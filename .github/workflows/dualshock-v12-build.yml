@@ -19,6 +19,12 @@ jobs:
       - name: Rebuild exact v1.2 source
         shell: pwsh
         run: |
+          0..5 | ForEach-Object {
+            $path = "v12payload/part{0:D2}.txt" -f $_
+            $h = (Get-FileHash $path -Algorithm SHA256).Hash.ToLower()
+            $n = (Get-Item $path).Length
+            Write-Host "PART$($_): bytes=$n sha256=$h"
+          }
           $parts = 0..5 | ForEach-Object { Get-Content ("v12payload/part{0:D2}.txt" -f $_) -Raw }
           $b64 = $parts -join ''
           [IO.File]::WriteAllBytes("DualShockStudio-Source-v1.2.zip", [Convert]::FromBase64String($b64))
