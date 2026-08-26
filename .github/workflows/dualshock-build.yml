@@ -26,6 +26,9 @@ jobs:
                  (Get-Content "dualshock-build/src.b64.04" -Raw)
           [IO.File]::WriteAllBytes("source.zip", [Convert]::FromBase64String($b64))
           Expand-Archive "source.zip" -DestinationPath "src"
+          Push-Location src
+          git apply ../dualshock-build/v11.patch
+          Pop-Location
           $proj = "src/DualShockStudio/DualShockStudio.csproj"
           $xml = Get-Content $proj -Raw
           $xml = $xml -replace '\s*<PackageReference Include="Microsoft\.Windows\.SDK\.Contracts" Version="[^"]+" />', ''
@@ -50,7 +53,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: DualShockStudio-Windows-x64
+          name: DualShockStudio-Windows-x64-v1.1
           path: |
             dist/DualShockStudio.exe
             dist/DualShockStudio.zip
