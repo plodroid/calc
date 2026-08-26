@@ -1,0 +1,199 @@
+--- a/DualShockStudio/MainForm.cs
++++ b/DualShockStudio/MainForm.cs
+@@ -12,11 +12,11 @@
+     readonly NotificationWatcher _notifications = new();
+     readonly AppSettings _settings;
+     readonly HashSet<string> _previousButtons = new(StringComparer.OrdinalIgnoreCase);
+-    readonly System.Windows.Forms.Timer _uiTimer = new() { Interval = 250 };
++    readonly System.Windows.Forms.Timer _uiTimer = new() { Interval = 16 };
+     readonly MMDeviceEnumerator _audioDevices = new();
+     readonly NotifyIcon _tray = new();
+ 
+-    Label _status = null!, _battery = null!, _transport = null!, _liveInput = null!, _gyro = null!, _touch = null!;
++    Label _status = null!, _battery = null!, _transport = null!, _liveInput = null!, _gyro = null!, _touch = null!, _triggers = null!;
+     TextBox _log = null!;
+     DataGridView _bindings = null!;
+     CheckBox _media = null!, _gyroMouse = null!, _pcControl = null!, _notifyRumble = null!, _beatRumble = null!, _micLight = null!, _gyroSteer = null!, _swipes = null!, _touchMouse = null!, _batteryWarn = null!, _autoReconnect = null!, _minimizeTray = null!;
+@@ -25,6 +25,12 @@
+     bool _touchWasActive;
+     int _touchStartX, _touchStartY, _touchLastX, _touchLastY;
+     bool _steeringLeft, _steeringRight;
++    bool _l2Pressed, _r2Pressed;
++    double _gyroBiasX, _gyroBiasY, _gyroFilteredX, _gyroFilteredY, _gyroCarryX, _gyroCarryY;
++    bool _gyroBiasReady;
++    double _steeringCenterAccelX;
++    bool _steeringCenterReady;
++    long _lastReconnectAttempt, _lastMicPoll;
+     long _lastBeatOutput;
+     bool? _lastMicMuted;
+     int _lastBatteryWarning = -1;
+@@ -94,12 +100,13 @@
+         var info = Card("Controller"); grid.Controls.Add(info, 0, 0);
+         _battery = AddMetric(info, "Battery", "—", 52); _transport = AddMetric(info, "Connection", "—", 92);
+         _liveInput = AddMetric(info, "Pressed", "—", 132);
+-        var rumbleTest = MakeButton("Test vibration", async (_, _) => await _controller.PulseAsync((int)(_settings.Tuning.RumbleStrength * 2.55), 180)); rumbleTest.Location = new Point(18, 182); info.Controls.Add(rumbleTest);
+-        var blue = MakeButton("Reset lightbar", (_, _) => _controller.SetLightbar(0, 80, 255)); blue.Location = new Point(170, 182); info.Controls.Add(blue);
++        var rumbleTest = MakeButton("Test long vibration", async (_, _) => await _controller.PulseAsync((int)(_settings.Tuning.RumbleStrength * 2.55), 1400)); rumbleTest.Location = new Point(18, 182); rumbleTest.Size = new Size(180, 36); info.Controls.Add(rumbleTest);
++        var blue = MakeButton("Reset lightbar", (_, _) => _controller.SetLightbar(0, 80, 255)); blue.Location = new Point(210, 182); info.Controls.Add(blue);
+ 
+         var sensors = Card("Live sensors"); grid.Controls.Add(sensors, 1, 0);
+-        _gyro = AddMetric(sensors, "Gyroscope", "X 0  Y 0  Z 0", 60); _touch = AddMetric(sensors, "Touchpad", "Not touching", 112);
+-        var hint = new Label { Text = "Tip: enable Gyro Mouse / Touchpad Mouse on the Features tab.", ForeColor = TextMuted, AutoSize = true, Location = new Point(18, 174) }; sensors.Controls.Add(hint);
++        _gyro = AddMetric(sensors, "Gyroscope", "X 0  Y 0  Z 0", 60); _touch = AddMetric(sensors, "Touchpad", "Not touching", 108);
++        _triggers = AddMetric(sensors, "Triggers raw", "L2 0   R2 0", 148);
++        var hint = new Label { Text = "R2 should stay near 0 when untouched. Gyro auto-calibrates while still.", ForeColor = TextMuted, AutoSize = true, Location = new Point(18, 190) }; sensors.Controls.Add(hint);
+ 
+         var logs = Card("Activity log"); grid.SetColumnSpan(logs, 2); grid.Controls.Add(logs, 0, 1);
+         _log = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BackColor = Color.FromArgb(17, 19, 24), ForeColor = TextMuted, BorderStyle = BorderStyle.FixedSingle, Dock = DockStyle.Fill, Font = new Font("Cascadia Mono", 9f), Margin = new Padding(8) };
+@@ -205,26 +212,28 @@
+         _controller.StateChanged += s => _pendingState = s;
+         _controller.Log += Log; _audio.Log += Log; _notifications.Log += Log;
+         _audio.LevelChanged += OnAudioLevel;
+-        _notifications.NotificationReceived += () => { if (_settings.Features.NotificationRumble) _ = _controller.PulseAsync((int)(_settings.Tuning.RumbleStrength * 2.2), 110); };
++        _notifications.NotificationReceived += () => { if (_settings.Features.NotificationRumble) _ = _controller.PulseAsync((int)(_settings.Tuning.RumbleStrength * 2.55), 650); };
+ 
+-        _media.CheckedChanged += (_, _) => SaveFeatureState(); _gyroMouse.CheckedChanged += (_, _) => SaveFeatureState(); _pcControl.CheckedChanged += (_, _) => SaveFeatureState();
++        _media.CheckedChanged += (_, _) => SaveFeatureState(); _gyroMouse.CheckedChanged += (_, _) => { SaveFeatureState(); if (_gyroMouse.Checked) ResetGyroCalibration(); }; _pcControl.CheckedChanged += (_, _) => SaveFeatureState();
+         _notifyRumble.CheckedChanged += async (_, _) => { SaveFeatureState(); if (_notifyRumble.Checked) await _notifications.RequestAndStartAsync(); else _notifications.Stop(); };
+         _beatRumble.CheckedChanged += (_, _) => { SaveFeatureState(); if (_beatRumble.Checked) _audio.Start(); else { _audio.Stop(); _controller.SetRumble(0, 0); } };
+         _micLight.CheckedChanged += (_, _) => { SaveFeatureState(); _lastMicMuted = null; if (!_micLight.Checked) _controller.SetLightbar(0, 80, 255); };
+-        _gyroSteer.CheckedChanged += (_, _) => SaveFeatureState(); _swipes.CheckedChanged += (_, _) => SaveFeatureState(); _touchMouse.CheckedChanged += (_, _) => SaveFeatureState();
++        _gyroSteer.CheckedChanged += (_, _) => { SaveFeatureState(); _steeringCenterReady = false; ReleaseSteering(); }; _swipes.CheckedChanged += (_, _) => SaveFeatureState(); _touchMouse.CheckedChanged += (_, _) => SaveFeatureState();
+         _batteryWarn.CheckedChanged += (_, _) => SaveFeatureState(); _autoReconnect.CheckedChanged += (_, _) => SaveFeatureState(); _minimizeTray.CheckedChanged += (_, _) => SaveFeatureState();
+     }
+ 
+     void ApplySettingsToUi()
+     {
+         var f = _settings.Features;
+-        _media.Checked = f.MediaRemote; _gyroMouse.Checked = f.GyroMouse; _pcControl.Checked = f.PcControl; _notifyRumble.Checked = false;
++        _media.Checked = f.MediaRemote; _gyroMouse.Checked = f.GyroMouse; _pcControl.Checked = f.PcControl; _notifyRumble.Checked = f.NotificationRumble;
+         _beatRumble.Checked = f.MusicBeatRumble; _micLight.Checked = f.MicStatusLightbar; _gyroSteer.Checked = f.GyroSteering; _swipes.Checked = f.TouchpadSwipe; _touchMouse.Checked = f.TouchpadMouse;
+         _batteryWarn.Checked = f.BatteryWarnings; _autoReconnect.Checked = f.AutoReconnect; _minimizeTray.Checked = f.MinimizeToTray;
+         var t = _settings.Tuning;
+         _gyroSens.Value = (decimal)t.GyroSensitivity; _steerSens.Value = (decimal)t.SteeringSensitivity; _touchSens.Value = (decimal)t.TouchpadSensitivity;
+         _deadzone.Value = t.StickDeadzone; _rumble.Value = t.RumbleStrength; _beatSens.Value = t.BeatSensitivity; _beatThreshold.Value = t.BeatMinThreshold; _swipeThreshold.Value = t.SwipeThreshold;
+         if (f.MusicBeatRumble) _audio.Start();
++        if (f.GyroMouse) ResetGyroCalibration();
++        if (f.NotificationRumble) _ = _notifications.RequestAndStartAsync();
+     }
+ 
+     void SaveFeatureState()
+@@ -247,17 +256,27 @@
+     {
+         var s = _pendingState; _pendingState = null;
+         if (s != null) ProcessState(s);
+-        if (!_controller.IsConnected && _settings.Features.AutoReconnect && Environment.TickCount64 % 4000 < 300) _controller.Connect();
+-        if (_settings.Features.MicStatusLightbar && _controller.IsConnected) UpdateMicLightbar();
++        long now = Environment.TickCount64;
++        if (!_controller.IsConnected && _settings.Features.AutoReconnect && now - _lastReconnectAttempt >= 4000) { _lastReconnectAttempt = now; _controller.Connect(); }
++        if (_settings.Features.MicStatusLightbar && _controller.IsConnected && now - _lastMicPoll >= 300) { _lastMicPoll = now; UpdateMicLightbar(); }
+     }
+ 
+     void ProcessState(DS4State s)
+     {
+         _battery.Text = s.BatteryPercent + "%" + (s.Charging ? " • charging" : "");
+         _transport.Text = _controller.IsBluetooth ? "Bluetooth" : "USB";
++        // Ignore the DS4 digital trigger bits and derive trigger presses from the analog values
++        // with hysteresis. This prevents noisy R2/L2 bits from repeatedly firing keybinds.
++        s.Buttons.Remove("L2"); s.Buttons.Remove("R2");
++        _l2Pressed = _l2Pressed ? s.L2 > 18 : s.L2 >= 42;
++        _r2Pressed = _r2Pressed ? s.R2 > 18 : s.R2 >= 42;
++        if (_l2Pressed) s.Buttons.Add("L2");
++        if (_r2Pressed) s.Buttons.Add("R2");
++
+         _liveInput.Text = s.Buttons.Count == 0 ? "—" : string.Join(", ", s.Buttons);
+         _gyro.Text = $"X {s.GyroX}   Y {s.GyroY}   Z {s.GyroZ}";
+         _touch.Text = s.TouchActive ? $"X {s.TouchX}   Y {s.TouchY}" : "Not touching";
++        _triggers.Text = $"L2 {s.L2}   R2 {s.R2}";
+ 
+         foreach (var button in s.Buttons)
+             if (!_previousButtons.Contains(button)) HandleInput(button);
+@@ -337,28 +356,70 @@
+     {
+         if (_settings.Features.GyroMouse)
+         {
+-            int dx = (int)(s.GyroY / 900.0 * _settings.Tuning.GyroSensitivity);
+-            int dy = (int)(s.GyroX / 900.0 * _settings.Tuning.GyroSensitivity);
+-            if (Math.Abs(dx) <= 20 && Math.Abs(dy) <= 20) InputExecutor.MoveMouse(dx, dy);
++            // DS4 gyro has a small stationary bias. Learn it slowly while the controller
++            // is near-still, then low-pass filter the remaining angular velocity.
++            if (!_gyroBiasReady)
++            {
++                _gyroBiasX = s.GyroX; _gyroBiasY = s.GyroY;
++                _gyroFilteredX = _gyroFilteredY = 0; _gyroCarryX = _gyroCarryY = 0;
++                _gyroBiasReady = true;
++            }
++
++            double gx = s.GyroX - _gyroBiasX, gy = s.GyroY - _gyroBiasY;
++            if (Math.Abs(gx) < 140 && Math.Abs(gy) < 140)
++            {
++                _gyroBiasX = _gyroBiasX * 0.995 + s.GyroX * 0.005;
++                _gyroBiasY = _gyroBiasY * 0.995 + s.GyroY * 0.005;
++                gx = s.GyroX - _gyroBiasX; gy = s.GyroY - _gyroBiasY;
++            }
++
++            const double gyroDeadzone = 38.0;
++            if (Math.Abs(gx) < gyroDeadzone) gx = 0;
++            if (Math.Abs(gy) < gyroDeadzone) gy = 0;
++            _gyroFilteredX = _gyroFilteredX * 0.72 + gx * 0.28;
++            _gyroFilteredY = _gyroFilteredY * 0.72 + gy * 0.28;
++
++            // Horizontal is deliberately inverted versus the old build: turning right moves right.
++            _gyroCarryX += (-_gyroFilteredY / 520.0) * _settings.Tuning.GyroSensitivity;
++            _gyroCarryY += ( _gyroFilteredX / 520.0) * _settings.Tuning.GyroSensitivity;
++            int dx = (int)Math.Truncate(_gyroCarryX), dy = (int)Math.Truncate(_gyroCarryY);
++            _gyroCarryX -= dx; _gyroCarryY -= dy;
++            if (dx != 0 || dy != 0) InputExecutor.MoveMouse(Math.Clamp(dx, -30, 30), Math.Clamp(dy, -30, 30));
+         }
++        else if (_gyroBiasReady) ResetGyroCalibration();
++
+         if (_settings.Features.PcControl)
+         {
+             double x = (s.LX - 128) / 127.0, y = (s.LY - 128) / 127.0;
+             double dead = _settings.Tuning.StickDeadzone / 100.0;
+             if (Math.Abs(x) > dead || Math.Abs(y) > dead) InputExecutor.MoveMouse((int)(x * 12), (int)(y * 12));
+         }
++
+         if (_settings.Features.GyroSteering)
+         {
+-            double z = s.GyroZ / 6000.0 * _settings.Tuning.SteeringSensitivity;
+-            bool left = z < -0.22, right = z > 0.22;
++            // Steering should depend on held tilt, not angular velocity. Gyro velocity
++            // becomes zero once you stop rotating, which caused the old A/D "click".
++            if (!_steeringCenterReady) { _steeringCenterAccelX = s.AccelX; _steeringCenterReady = true; }
++            double delta = s.AccelX - _steeringCenterAccelX;
++            double press = 900.0 / Math.Max(0.25, _settings.Tuning.SteeringSensitivity);
++            double release = press * 0.58;
++            bool left = _steeringLeft ? delta < -release : delta < -press;
++            bool right = _steeringRight ? delta > release : delta > press;
++            if (left && right) { left = right = false; }
+             if (left != _steeringLeft) { if (left) InputExecutor.KeyDown(Keys.A); else InputExecutor.KeyUp(Keys.A); _steeringLeft = left; }
+             if (right != _steeringRight) { if (right) InputExecutor.KeyDown(Keys.D); else InputExecutor.KeyUp(Keys.D); _steeringRight = right; }
++            if (!left && !right && Math.Abs(delta) < release * 0.35) _steeringCenterAccelX = _steeringCenterAccelX * 0.995 + s.AccelX * 0.005;
+         }
+-        else ReleaseSteering();
++        else { ReleaseSteering(); _steeringCenterReady = false; }
+ 
+         if (Math.Abs(s.GyroX) + Math.Abs(s.GyroY) + Math.Abs(s.GyroZ) > 65000 && !_previousButtons.Contains("GyroShake")) ExecuteBinding("GyroShake");
+     }
+ 
++    void ResetGyroCalibration()
++    {
++        _gyroBiasReady = false; _gyroBiasX = _gyroBiasY = 0; _gyroFilteredX = _gyroFilteredY = 0; _gyroCarryX = _gyroCarryY = 0;
++    }
++
+     void ReleaseSteering()
+     {
+         if (_steeringLeft) { InputExecutor.KeyUp(Keys.A); _steeringLeft = false; }
+--- a/DualShockStudio/Services/DS4Controller.cs
++++ b/DualShockStudio/Services/DS4Controller.cs
+@@ -147,7 +147,9 @@
+ 
+         byte b0 = data[common + 4], b1 = data[common + 5], b2 = data[common + 6];
+         AddIf(s, b0, 0x10, "Square"); AddIf(s, b0, 0x20, "Cross"); AddIf(s, b0, 0x40, "Circle"); AddIf(s, b0, 0x80, "Triangle");
+-        AddIf(s, b1, 0x01, "L1"); AddIf(s, b1, 0x02, "R1"); AddIf(s, b1, 0x04, "L2"); AddIf(s, b1, 0x08, "R2");
++        AddIf(s, b1, 0x01, "L1"); AddIf(s, b1, 0x02, "R1");
++        // L2/R2 are handled from their analog values in MainForm with hysteresis.
++        // Some DS4 revisions/aged membranes can chatter the digital trigger bits.
+         AddIf(s, b1, 0x10, "Share"); AddIf(s, b1, 0x20, "Options"); AddIf(s, b1, 0x40, "L3"); AddIf(s, b1, 0x80, "R3");
+         AddIf(s, b2, 0x01, "PS"); AddIf(s, b2, 0x02, "TouchpadClick");
