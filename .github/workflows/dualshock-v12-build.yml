@@ -1,0 +1,54 @@
+name: Build DualShock Studio v1.2
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  windows-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Rebuild exact v1.2 source
+        shell: pwsh
+        run: |
+          $parts = 0..5 | ForEach-Object { Get-Content ("v12payload/part{0:D2}.txt" -f $_) -Raw }
+          $b64 = $parts -join ''
+          [IO.File]::WriteAllBytes("DualShockStudio-Source-v1.2.zip", [Convert]::FromBase64String($b64))
+          $hash = (Get-FileHash "DualShockStudio-Source-v1.2.zip" -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne 'cd4658f25ed8b59f4e5ceb7c0285533a21885da540afe9f6b64046c62db87bf8') { throw "Source payload SHA256 mismatch: $hash" }
+          New-Item -ItemType Directory -Force -Path buildsrc | Out-Null
+          Expand-Archive "DualShockStudio-Source-v1.2.zip" -DestinationPath buildsrc
+          dotnet new globaljson --sdk-version 8.0.424 --force
+
+      - name: Restore
+        run: dotnet restore buildsrc/DualShockStudio/DualShockStudio.csproj
+
+      - name: Publish
+        run: dotnet publish buildsrc/DualShockStudio/DualShockStudio.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $pub = "buildsrc/DualShockStudio/bin/Release/net8.0-windows10.0.19041.0/win-x64/publish"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "$pub/DualShockStudio.exe" "dist/DualShockStudio-v1.2.exe"
+          Copy-Item "buildsrc/DualShockStudio/README.md" "dist/README.md"
+          Compress-Archive -Path "dist/DualShockStudio-v1.2.exe","dist/README.md" -DestinationPath "dist/DualShockStudio-v1.2.zip" -Force
+          Copy-Item "DualShockStudio-Source-v1.2.zip" "dist/DualShockStudio-v1.2-Source.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DualShockStudio-v1.2-Windows-x64
+          path: |
+            dist/DualShockStudio-v1.2.exe
+            dist/DualShockStudio-v1.2.zip
+            dist/DualShockStudio-v1.2-Source.zip
+          if-no-files-found: error
